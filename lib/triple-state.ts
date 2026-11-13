@@ -14,4 +14,5 @@ export interface GalleryEntryItem {
   single_use: boolean;
   images_count: number;
   created_at: string;
+  revoked?: boolean;
 }

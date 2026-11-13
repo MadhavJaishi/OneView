@@ -2,21 +2,34 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  UploadCloud,
+  Shield,
+  Layers,
+  Upload,
   Globe,
   Lock,
   Clock,
-  Shield,
-  Trash2,
   Copy,
   Check,
   ExternalLink,
-  Layers,
-  ShieldAlert,
-  FileImage,
+  Trash2,
+  Sliders,
+  CheckCircle2,
+  FolderLock,
+  LogOut,
+  X,
+  FileCheck,
+  Zap,
+  Droplet,
+  Link2Off,
+  Ban,
+  RotateCcw,
 } from 'lucide-react';
 import { GalleryEntryItem } from '@/lib/triple-state';
 import { useToast } from '@/components/ToastProvider';
+import { AuthModal } from '@/components/AuthModal';
+import { QrModal } from '@/components/QrModal';
+import { CommandPalette } from '@/components/CommandPalette';
+import { QrCode, Command as CommandIcon } from 'lucide-react';
 
 interface StagedFile {
   file: File;
@@ -25,55 +38,99 @@ interface StagedFile {
 
 export default function Dashboard() {
   const { toast, confirmModal } = useToast();
+  
+  // State
   const [activeTab, setActiveTab] = useState<'media' | 'proxy'>('media');
   const [title, setTitle] = useState('');
   const [proxyUrl, setProxyUrl] = useState('');
   const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
   const [hours, setHours] = useState(24);
-  const [singleUse, setSingleUse] = useState(false);
+  const [watermarkEnabled, setWatermarkEnabled] = useState(true);
+  const [watermarkText, setWatermarkText] = useState('RESTRICTED VIEW');
+  const [singleUse, setSingleUse] = useState(true);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdLinks, setCreatedLinks] = useState<{
+    galleryId: string;
     shortUrl: string;
     seedUrl: string;
     expiresAt: string;
     shortCode: string;
+    isRevoked?: boolean;
   } | null>(null);
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [cachedList, setCachedList] = useState<GalleryEntryItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Authentication & History Vault State
+  const [user, setUser] = useState<any>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyList, setHistoryList] = useState<GalleryEntryItem[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // QR Code & Command Palette State
+  const [qrModalData, setQrModalData] = useState<{ isOpen: boolean; url: string; title: string }>({
+    isOpen: false,
+    url: '',
+    title: '',
+  });
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load vaults directly from database / server API
-  const refreshGalleries = async () => {
+  // Initial Auth check
+  const checkAuth = async () => {
     try {
-      const res = await fetch('/api/gallery');
+      const res = await fetch('/api/auth');
       const data = await res.json();
-      if (data.success && data.galleries) {
-        const mapped: GalleryEntryItem[] = data.galleries.map((g: any) => ({
-          id: g.id,
-          title: g.title,
-          type: g.type,
-          short_code: g.share_link?.short_code || '',
-          secure_seed: g.share_link?.secure_seed || '',
-          expires_at: g.share_link?.expires_at || '',
-          single_use: g.share_link?.single_use || false,
-          images_count: g.images?.length || 0,
-          created_at: g.created_at,
-        }));
-        setCachedList(mapped);
+      if (data.authenticated) {
+        setUser(data.user);
+      } else {
+        setUser(null);
       }
-    } catch (err) {
-      console.warn('Could not load galleries from database API', err);
+    } catch {
+      setUser(null);
     }
   };
 
   useEffect(() => {
-    refreshGalleries();
+    checkAuth();
+    // Auto preload history list for command palette if authenticated
+    fetch('/api/gallery')
+      .then(r => r.json())
+      .then(d => {
+        if (d.success && d.galleries) {
+          const mapped: GalleryEntryItem[] = d.galleries.map((g: any) => ({
+            id: g.id,
+            title: g.title,
+            type: g.type,
+            short_code: g.share_link?.short_code || '',
+            secure_seed: g.share_link?.secure_seed || '',
+            expires_at: g.share_link?.expires_at || '',
+            single_use: g.share_link?.single_use || false,
+            images_count: g.images?.length || 0,
+            created_at: g.created_at,
+          }));
+          setHistoryList(mapped);
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  // System Buffer Clipboard Injection (Ctrl+V / Cmd+V)
+  // Keyboard shortcut for Cmd+K / Ctrl+K
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setShowCommandPalette(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => window.removeEventListener('keydown', handleGlobalKey);
+  }, []);
+
+  // System Buffer Clipboard Capture (Ctrl+V / Cmd+V)
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       if (activeTab !== 'media') return;
@@ -94,12 +151,67 @@ export default function Dashboard() {
 
       if (newFiles.length > 0) {
         setStagedFiles(prev => [...prev, ...newFiles]);
+        toast.info(`Pasted ${newFiles.length} image(s) from clipboard.`, 'Asset Captured');
       }
     };
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [activeTab]);
+  }, [activeTab, toast]);
+
+  // Load History Vault from database
+  const fetchHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch('/api/gallery?history=true');
+      const data = await res.json();
+      if (!res.ok && data.restricted) {
+        setShowHistoryModal(false);
+        setShowAuthModal(true);
+        toast.warning('History Vault requires authentication. Please log in.', 'Restricted Area');
+        return;
+      }
+
+      if (data.success && data.galleries) {
+        const mapped: GalleryEntryItem[] = data.galleries.map((g: any) => ({
+          id: g.id,
+          title: g.title,
+          type: g.type,
+          short_code: g.share_link?.short_code || '',
+          secure_seed: g.share_link?.secure_seed || '',
+          expires_at: g.share_link?.expires_at || '',
+          single_use: g.share_link?.single_use || false,
+          images_count: g.images?.length || 0,
+          created_at: g.created_at,
+        }));
+        setHistoryList(mapped);
+      }
+    } catch (err: any) {
+      toast.error('Failed to load history vault from database', 'Error');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const handleOpenHistory = () => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    setShowHistoryModal(true);
+    fetchHistory();
+  };
+
+  const handleLogout = async () => {
+    await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'logout', email: 'none', password: 'none' }),
+    });
+    setUser(null);
+    setShowHistoryModal(false);
+    toast.info('Signed out of Vault account.');
+  };
 
   // Smart Drag & Drop Aggregation + Inter-Domain Drag Snatching
   const handleDrop = async (e: React.DragEvent) => {
@@ -109,7 +221,6 @@ export default function Dashboard() {
 
     if (activeTab !== 'media') return;
 
-    // Direct files dropped
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
       const staged = droppedFiles.map(file => ({
@@ -120,7 +231,6 @@ export default function Dashboard() {
       return;
     }
 
-    // Inter-domain drag snatching: handle dragged images from other tabs/webpages
     const html = e.dataTransfer.getData('text/html');
     const uri = e.dataTransfer.getData('text/uri-list');
 
@@ -140,34 +250,27 @@ export default function Dashboard() {
           const file = new File([blob], `snatched-${Date.now()}.png`, { type: blob.type || 'image/png' });
           setStagedFiles(prev => [...prev, { file, previewUrl: URL.createObjectURL(file) }]);
         } catch {
-          // If cross-origin prevented direct fetch
-          console.warn('Inter-domain snatch fetch blocked by CORS for URL', candidateUrl);
+          console.warn('Inter-domain snatch fetch blocked by CORS');
         }
       }
     }
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
-
-  // Form Submission & Token Generation
+  // Handle Vault Creation
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (activeTab === 'media' && stagedFiles.length === 0) {
-      toast.warning('Please add at least one image before sealing the vault.');
+      toast.warning('Please select at least one visual asset to share.');
       return;
     }
     if (activeTab === 'proxy' && !proxyUrl.trim()) {
-      toast.warning('Please enter a target URL for the stealth proxy tunnel.');
+      toast.warning('Please enter a target URL for the masked proxy relay.');
+      return;
+    }
+
+    if (!user && hours > 24) {
+      toast.warning('Unregistered sessions are restricted to a 24-hour retention cap. Log in for 7 days.', 'Limited Time Policy');
+      setHours(24);
       return;
     }
 
@@ -175,9 +278,11 @@ export default function Dashboard() {
     try {
       const formData = new FormData();
       formData.append('type', activeTab);
-      formData.append('title', title || (activeTab === 'proxy' ? 'Live Web Proxy' : 'Confidential Gallery'));
+      formData.append('title', title || (activeTab === 'proxy' ? 'Masked Web Session' : 'Protected Asset Collection'));
       formData.append('hours', hours.toString());
       formData.append('singleUse', singleUse.toString());
+      formData.append('watermarkEnabled', watermarkEnabled.toString());
+      formData.append('watermarkText', watermarkText);
 
       if (activeTab === 'proxy') {
         formData.append('proxyTargetUrl', proxyUrl.trim());
@@ -194,59 +299,126 @@ export default function Dashboard() {
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Upload failed');
+        throw new Error(data.error || 'Creation failed');
       }
 
       const linkData = {
+        galleryId: data.gallery.id,
         shortUrl: `${window.location.origin}${data.shareLink.short_url}`,
         seedUrl: `${window.location.origin}${data.shareLink.seed_url}`,
         expiresAt: data.shareLink.expires_at,
         shortCode: data.shareLink.short_code,
+        isRevoked: false,
       };
 
       setCreatedLinks(linkData);
+      toast.success('Secure link generated and stored in database.', 'Vault Ready');
 
-      // Refresh list directly from database
-      await refreshGalleries();
-
-      toast.success('Tokenized vault generated successfully.', 'Vault Sealed');
+      // Refresh history list if unlocked
+      fetchHistory();
 
       // Reset staged input
       setStagedFiles([]);
-      setTitle('');
       setProxyUrl('');
     } catch (err: any) {
-      toast.error(err.message || 'Failed to seal vault', 'Upload Error');
+      toast.error(err.message || 'Failed to seal vault', 'Error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Secure Revoke & Deletion
-  const handleDelete = (galleryId: string) => {
+  // Revoke link (invalidates link immediately without deleting history record)
+  const handleRevoke = (galleryId: string) => {
     confirmModal({
-      title: 'Permanent Vault Revocation',
-      message: 'Are you sure you want to permanently revoke and delete this vault? All associated cryptographic access tokens will be immediately invalidated.',
-      confirmText: 'Revoke & Delete',
-      cancelText: 'Keep Vault',
+      title: 'Revoke Secure Link',
+      message: 'Are you sure you want to revoke this link? Anyone with the URL will immediately receive an Access Revoked error, but its record will remain archived in your History Vault.',
+      confirmText: 'Revoke Now',
+      cancelText: 'Cancel',
       onConfirm: async () => {
-        // Transmit physical cascade deletion to database
         try {
           const res = await fetch('/api/gallery', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ galleryId }),
+            body: JSON.stringify({ galleryId, action: 'revoke' }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            toast.error(data.error || 'Failed to revoke link', 'Error');
+          } else {
+            if (createdLinks && createdLinks.galleryId === galleryId) {
+              setCreatedLinks(prev => prev ? { ...prev, isRevoked: true } : null);
+            }
+            fetchHistory();
+            toast.info('Access token revoked. Link is now disabled.', 'Link Revoked');
+          }
+        } catch (err: any) {
+          toast.error(err.message || 'Network error during revocation', 'Error');
+        }
+      },
+    });
+  };
+
+  // Permanent Delete (wiping all database records with zero trace)
+  const handleDelete = (galleryId: string) => {
+    confirmModal({
+      title: 'Permanently Erase Vault',
+      message: 'This will completely erase all files, tokens, and history of this vault from the database forever. This action is irreversible.',
+      confirmText: 'Permanently Erase',
+      cancelText: 'Keep Vault',
+      onConfirm: async () => {
+        try {
+          const res = await fetch('/api/gallery', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ galleryId, action: 'delete' }),
           });
           const data = await res.json();
           if (!res.ok) {
             toast.error(data.error || 'Failed to delete in database', 'Server Error');
           } else {
-            // Update UI list from database
-            await refreshGalleries();
-            toast.info('Vault has been permanently purged from database.', 'Revoked');
+            if (createdLinks && createdLinks.galleryId === galleryId) {
+              setCreatedLinks(null);
+            }
+            fetchHistory();
+            toast.info('Vault and all history permanently erased.', 'Deleted');
           }
         } catch (err: any) {
           toast.error(err.message || 'Network error during deletion', 'Revocation Failed');
+        }
+      },
+    });
+  };
+
+  // Reinstate / Restore expired or revoked link
+  const handleRestore = (galleryId: string) => {
+    confirmModal({
+      title: 'Reactivate Secure Link',
+      message: 'Restore this vault and reactivate its access link? This will renew the expiration clock for an additional 24 hours and reset single-use counters.',
+      confirmText: 'Reactivate Link',
+      cancelText: 'Cancel',
+      onConfirm: async () => {
+        try {
+          const res = await fetch('/api/gallery', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ galleryId, extensionHours: 24 }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            toast.error(data.error || 'Failed to restore link', 'Error');
+          } else {
+            if (createdLinks && createdLinks.galleryId === galleryId) {
+              setCreatedLinks(prev => prev ? {
+                ...prev,
+                isRevoked: false,
+                expiresAt: data.shareLink.expires_at,
+              } : null);
+            }
+            fetchHistory();
+            toast.success('Link successfully reactivated for 24 hours.', 'Vault Restored');
+          }
+        } catch (err: any) {
+          toast.error(err.message || 'Network error during restoration', 'Error');
         }
       },
     });
@@ -260,111 +432,76 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="app-container">
-      {/* Header */}
-      <header style={{ marginBottom: '2.5rem', textAlign: 'center' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.5rem' }}>
-          <div
-            style={{
-              background: 'linear-gradient(135deg, var(--accent-cyan), var(--accent-purple))',
-              padding: '0.4rem',
-              borderRadius: '8px',
-              display: 'flex',
-            }}
-          >
-            <Shield size={22} color="#050811" />
+    <div className="app-shell">
+      {/* Top Navbar */}
+      <header className="app-header">
+        <div className="brand-badge">
+          <div className="brand-icon-box">
+            <Shield size={20} />
           </div>
-          <h1 style={{ fontSize: '2.2rem', fontWeight: 800, letterSpacing: '-1px' }}>
-            One<span style={{ color: 'var(--accent-cyan)' }}>View</span>
-          </h1>
+          <div>
+            <div className="brand-name">One<span>View</span> Studio</div>
+            <div className="brand-tagline">Privacy-Preserving Asset Distribution & Web Relay</div>
+          </div>
         </div>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', maxWidth: '600px', margin: '0 auto' }}>
-          Next-Generation, Privacy-Preserving Asset Distribution & Stealth Live Web Proxy Architecture.
-        </p>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <button
+            type="button"
+            className="vault-trigger-btn"
+            onClick={() => setShowCommandPalette(true)}
+            title="Open Command Palette (Cmd + K)"
+          >
+            <CommandIcon size={14} />
+            <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>⌘K</span>
+          </button>
+
+          <button
+            type="button"
+            className={`vault-trigger-btn ${user ? 'unlocked' : ''}`}
+            onClick={handleOpenHistory}
+          >
+            <FolderLock size={15} />
+            {user ? `History Vault (${user.email.split('@')[0]})` : 'History Vault'}
+          </button>
+        </div>
       </header>
 
-      {/* Main Creation Card */}
-      <div className="glass-panel" style={{ padding: '2rem', marginBottom: '3rem' }}>
-        {/* Mode Selector */}
-        <div
-          style={{
-            display: 'flex',
-            gap: '1rem',
-            borderBottom: '1px solid var(--border-subtle)',
-            paddingBottom: '1rem',
-            marginBottom: '1.75rem',
-          }}
-        >
-          <button
-            onClick={() => setActiveTab('media')}
-            style={{
-              background: activeTab === 'media' ? 'rgba(0, 240, 255, 0.1)' : 'transparent',
-              color: activeTab === 'media' ? 'var(--accent-cyan)' : 'var(--text-muted)',
-              border: activeTab === 'media' ? '1px solid var(--border-active)' : '1px solid transparent',
-              borderRadius: 'var(--radius-sm)',
-              padding: '0.6rem 1.25rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              transition: 'all 0.2s',
-            }}
-          >
-            <FileImage size={18} /> Visual Media Collection
-          </button>
-          <button
-            onClick={() => setActiveTab('proxy')}
-            style={{
-              background: activeTab === 'proxy' ? 'rgba(0, 240, 255, 0.1)' : 'transparent',
-              color: activeTab === 'proxy' ? 'var(--accent-cyan)' : 'var(--text-muted)',
-              border: activeTab === 'proxy' ? '1px solid var(--border-active)' : '1px solid transparent',
-              borderRadius: 'var(--radius-sm)',
-              padding: '0.6rem 1.25rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              transition: 'all 0.2s',
-            }}
-          >
-            <Globe size={18} /> Stealth Live Web Proxy
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          {/* Vault Title */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-              Vault Identifier / Title
-            </label>
-            <input
-              type="text"
-              className="input-field"
-              placeholder={activeTab === 'media' ? 'e.g. Confidential Q4 Wireframes' : 'e.g. Staging Dashboard Proxy'}
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-            />
+      {/* Main Studio Two-Column Grid */}
+      <div className="studio-grid">
+        {/* Left Column: Asset Selection & Payload */}
+        <section className="studio-card">
+          <div className="mode-pill-bar">
+            <button
+              type="button"
+              className={`mode-pill-tab ${activeTab === 'media' ? 'active' : ''}`}
+              onClick={() => setActiveTab('media')}
+            >
+              <FileCheck size={16} /> Visual Assets
+            </button>
+            <button
+              type="button"
+              className={`mode-pill-tab ${activeTab === 'proxy' ? 'active' : ''}`}
+              onClick={() => setActiveTab('proxy')}
+            >
+              <Globe size={16} /> Masked Web Tunnel
+            </button>
           </div>
 
-          {/* Mode Tab 1: Visual Media Ingestion */}
           {activeTab === 'media' && (
-            <div style={{ marginBottom: '1.5rem' }}>
+            <div>
               <div
+                className={`upload-canvas ${isDragging ? 'active-drag' : ''}`}
                 onDrop={handleDrop}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onClick={() => fileInputRef.current?.click()}
-                style={{
-                  border: isDragging ? '2px dashed var(--accent-cyan)' : '2px dashed var(--border-subtle)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '2.5rem 1.5rem',
-                  textAlign: 'center',
-                  background: isDragging ? 'rgba(0, 240, 255, 0.05)' : 'rgba(255, 255, 255, 0.01)',
-                  cursor: 'pointer',
-                  transition: 'border-color 0.2s, background 0.2s',
+                onDragOver={e => {
+                  e.preventDefault();
+                  setIsDragging(true);
                 }}
+                onDragLeave={e => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                }}
+                onClick={() => fileInputRef.current?.click()}
               >
                 <input
                   type="file"
@@ -382,50 +519,35 @@ export default function Dashboard() {
                     }
                   }}
                 />
-                <UploadCloud size={44} style={{ color: 'var(--accent-cyan)', marginBottom: '0.75rem' }} />
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.35rem' }}>
-                  Smart Drag-and-Drop Aggregation
-                </h3>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                  Drop files directly, snatch images from other tabs, or paste directly with <strong>Ctrl+V / Cmd+V</strong>
-                </p>
-                <span
-                  style={{
-                    fontSize: '0.75rem',
-                    background: 'rgba(255, 255, 255, 0.05)',
-                    padding: '0.25rem 0.6rem',
-                    borderRadius: '4px',
-                    color: 'var(--text-dim)',
-                  }}
-                >
-                  Supports massive arrays of PNG, JPEG, WEBP, GIF
-                </span>
+                <div className="upload-icon-avatar">
+                  <Upload size={20} />
+                </div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
+                  Click to browse or drop media files
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  Supports drag snatching from other tabs and Ctrl+V / Cmd+V paste
+                </div>
               </div>
 
-              {/* Staged Horizontal Kinetic Viewport */}
+              {/* Horizontal Kinetic Viewport Preview */}
               {stagedFiles.length > 0 && (
-                <div style={{ marginTop: '1.5rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                      Staged Assets ({stagedFiles.length})
+                <div style={{ marginTop: '1.25rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                      Staged items ({stagedFiles.length})
                     </span>
                     <button
                       type="button"
                       onClick={() => setStagedFiles([])}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--accent-danger)',
-                        fontSize: '0.8rem',
-                        cursor: 'pointer',
-                      }}
+                      style={{ background: 'none', border: 'none', color: 'var(--accent-danger)', fontSize: '0.8rem', cursor: 'pointer' }}
                     >
-                      Clear All
+                      Remove All
                     </button>
                   </div>
-                  <div className="kinetic-dock">
+                  <div className="preview-carousel">
                     {stagedFiles.map((sf, index) => (
-                      <div key={index} className="dock-item">
+                      <div key={index} className="preview-thumbnail-card">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={sf.previewUrl} alt={sf.file.name} />
                         <button
@@ -438,16 +560,17 @@ export default function Dashboard() {
                             position: 'absolute',
                             top: '6px',
                             right: '6px',
-                            background: 'rgba(0,0,0,0.65)',
+                            background: 'rgba(0,0,0,0.7)',
                             border: 'none',
-                            color: '#ff3344',
-                            borderRadius: '50%',
-                            width: '24px',
-                            height: '24px',
+                            color: '#fff',
+                            borderRadius: '4px',
+                            width: '20px',
+                            height: '20px',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
                             cursor: 'pointer',
+                            fontSize: '0.75rem',
                           }}
                         >
                           ✕
@@ -460,297 +583,547 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Mode Tab 2: Stealth Live Web Proxy */}
           {activeTab === 'proxy' && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                Upstream Target Address (Shielded Destination)
-              </label>
-              <input
-                type="text"
-                className="input-field"
-                placeholder="https://internal-metrics.company.local or https://example.com"
-                value={proxyUrl}
-                onChange={e => setProxyUrl(e.target.value)}
-                required
-              />
-              <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: '0.5rem' }}>
-                🛡️ The raw host address is completely masked. Viewers interact with the live destination through an
-                isolated backchannel tunnel.
+            <div>
+              <div className="form-group">
+                <label className="form-label">Destination Web URL</label>
+                <input
+                  type="url"
+                  className="text-input"
+                  placeholder="https://private-dashboard.company.internal"
+                  value={proxyUrl}
+                  onChange={e => setProxyUrl(e.target.value)}
+                  required
+                />
+              </div>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Shielded proxy tunnel: Target hostname is fully hidden from client inspection and proxied through isolated stream rewriting.
               </p>
             </div>
           )}
+        </section>
 
-          {/* Security & Lifecycle Controls */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-              gap: '1.5rem',
-              padding: '1.25rem',
-              background: 'rgba(0,0,0,0.25)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-subtle)',
-              marginBottom: '1.75rem',
-            }}
-          >
-            {/* Clock Depletion Slider */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <Clock size={15} style={{ color: 'var(--accent-cyan)' }} />
-                  Custom Time Depletion
-                </span>
-                <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
-                  {hours} {hours === 1 ? 'Hour' : 'Hours'}
-                </span>
-              </div>
+        {/* Right Column: Security Policy & LifeCycle Config */}
+        <section className="studio-card">
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label className="form-label">Share Title / Reference</label>
               <input
-                type="range"
-                min="1"
-                max="168"
-                value={hours}
-                onChange={e => setHours(parseInt(e.target.value, 10))}
-                style={{ width: '100%', accentColor: 'var(--accent-cyan)' }}
+                type="text"
+                className="text-input"
+                placeholder="e.g., Q4 Design Specs"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
               />
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                Range: 1 hour up to 168 hours (7 days)
-              </span>
             </div>
 
-            {/* Single-Usage Locking */}
-            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.75rem',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={singleUse}
-                  onChange={e => setSingleUse(e.target.checked)}
-                  style={{ width: '18px', height: '18px', accentColor: 'var(--accent-cyan)' }}
-                />
+            <div className="form-group">
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                <label className="form-label" style={{ margin: 0 }}>Expiration Lifespan</label>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                  {hours === 168 ? '7 Days' : `${hours} Hours`}
+                </span>
+              </div>
+              <div className="duration-grid">
+                {[
+                  { val: 1, label: '1h' },
+                  { val: 6, label: '6h' },
+                  { val: 12, label: '12h' },
+                  { val: 24, label: '24h' },
+                  { val: 168, label: '7d', needsLogin: true },
+                ].map(opt => {
+                  const isGated = !user && opt.needsLogin;
+                  return (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      onClick={() => {
+                        if (isGated) {
+                          setShowAuthModal(true);
+                          toast.warning('7-day retention requires Vault authentication.', 'Session Limit');
+                          return;
+                        }
+                        setHours(opt.val);
+                      }}
+                      className={`duration-chip ${hours === opt.val ? 'selected' : ''} ${isGated ? 'gated' : ''}`}
+                      title={isGated ? 'Requires login' : ''}
+                    >
+                      {opt.label} {isGated ? '🔒' : ''}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Shield Policies */}
+            <div style={{ margin: '1.5rem 0' }}>
+              <div className="setting-toggle-row">
                 <div>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <Lock size={14} style={{ color: 'var(--accent-cyan)' }} />
-                    Single-Usage Device Locking
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-bright)' }}>
+                    Single-Use Burn Link
                   </div>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    Binds link to first opened session. Rejects secondary browsers.
-                  </span>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                    Self-destructs immediately after first access
+                  </div>
                 </div>
-              </label>
+                <button
+                  type="button"
+                  className={`switch-control ${singleUse ? 'checked' : ''}`}
+                  onClick={() => setSingleUse(!singleUse)}
+                >
+                  <div className="switch-knob" />
+                </button>
+              </div>
+
+              <div className="setting-toggle-row">
+                <div>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-bright)' }}>
+                    Dynamic Watermark Grid
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                    Renders dynamic session-bound overlay
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={`switch-control ${watermarkEnabled ? 'checked' : ''}`}
+                  onClick={() => setWatermarkEnabled(!watermarkEnabled)}
+                >
+                  <div className="switch-knob" />
+                </button>
+              </div>
+            </div>
+
+            {watermarkEnabled && (
+              <div className="form-group">
+                <label className="form-label">Watermark Stamp</label>
+                <input
+                  type="text"
+                  className="text-input"
+                  value={watermarkText}
+                  onChange={e => setWatermarkText(e.target.value)}
+                />
+              </div>
+            )}
+
+            <button type="submit" className="action-submit-button" disabled={isSubmitting}>
+              <Zap size={16} />
+              {isSubmitting ? 'Sealing Vault in Database...' : 'Generate Protected Link'}
+            </button>
+          </form>
+        </section>
+      </div>
+
+      {/* Generated Token Result Card */}
+      {createdLinks && (
+        <div
+          className="studio-card"
+          style={{
+            marginTop: '2rem',
+            border: createdLinks.isRevoked ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid rgba(59, 130, 246, 0.4)',
+            background: 'rgba(15, 22, 36, 0.95)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: createdLinks.isRevoked ? '#f87171' : '#60a5fa' }}>
+              <CheckCircle2 size={20} />
+              <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>
+                {createdLinks.isRevoked ? 'Last Generated Link (Revoked)' : 'Last Secured Link Generated'}
+              </h3>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              {createdLinks.isRevoked ? (
+                <button
+                  type="button"
+                  className="vault-trigger-btn"
+                  onClick={() => handleRestore(createdLinks.galleryId)}
+                  style={{
+                    color: '#34d399',
+                    borderColor: 'rgba(52, 211, 153, 0.3)',
+                    background: 'rgba(52, 211, 153, 0.08)',
+                    fontSize: '0.78rem',
+                  }}
+                  title="Reactivate link for another 24 hours"
+                >
+                  <RotateCcw size={14} /> Reactivate
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="vault-trigger-btn"
+                  onClick={() => handleRevoke(createdLinks.galleryId)}
+                  style={{
+                    color: '#f87171',
+                    borderColor: 'rgba(239, 68, 68, 0.3)',
+                    background: 'rgba(239, 68, 68, 0.08)',
+                    fontSize: '0.78rem',
+                  }}
+                  title="Immediately disable this link"
+                >
+                  <Ban size={14} /> Revoke Link
+                </button>
+              )}
+              <button
+                type="button"
+                className="vault-trigger-btn"
+                onClick={() => handleDelete(createdLinks.galleryId)}
+                style={{
+                  color: 'var(--text-muted)',
+                  fontSize: '0.78rem',
+                }}
+                title="Permanently erase vault and all history"
+              >
+                <Trash2 size={14} /> Erase
+              </button>
             </div>
           </div>
 
-          {/* Submit Action */}
-          <button
-            type="submit"
-            className="btn-primary"
-            disabled={isSubmitting}
-            style={{ width: '100%', justifyContent: 'center', padding: '0.9rem' }}
-          >
-            {isSubmitting ? (
-              'Securing Assets & Minting Cryptographic Tokens...'
-            ) : (
-              <>
-                <Shield size={18} /> Generate Secure Tokenized Vault
-              </>
-            )}
-          </button>
-        </form>
-
-        {/* Newly Minted Share Link Modal / Card */}
-        {createdLinks && (
-          <div
-            style={{
-              marginTop: '2rem',
-              padding: '1.5rem',
-              background: 'rgba(0, 240, 255, 0.05)',
-              border: '1px solid var(--accent-cyan)',
-              borderRadius: 'var(--radius-md)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', color: 'var(--accent-cyan)' }}>
-              <ShieldAlert size={20} />
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700 }}>Vault Sealed & Tokenized</h3>
-            </div>
-
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
-                Human-Readable 6-Character Redirection Link
-              </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <label className="form-label">Human-Readable Quick Link</label>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <input
-                  readOnly
-                  className="input-field"
-                  value={createdLinks.shortUrl}
-                  style={{ fontFamily: 'var(--font-mono)' }}
-                />
+                <input readOnly className="text-input" value={createdLinks.shortUrl} style={{ fontFamily: 'var(--font-mono)' }} />
                 <button
                   type="button"
-                  className="btn-primary"
+                  className="vault-trigger-btn"
+                  onClick={() => setQrModalData({ isOpen: true, url: createdLinks.shortUrl, title: title || 'Confidential Share' })}
+                  title="Display QR Code"
+                >
+                  <QrCode size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="vault-trigger-btn"
                   onClick={() => copyToClipboard(createdLinks.shortUrl, 'short')}
                 >
                   {copiedKey === 'short' ? <Check size={16} /> : <Copy size={16} />}
                 </button>
-                <a
-                  href={createdLinks.shortUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn-primary"
-                  style={{ textDecoration: 'none' }}
-                >
+                <a href={createdLinks.shortUrl} target="_blank" rel="noreferrer" className="vault-trigger-btn">
                   <ExternalLink size={16} />
                 </a>
               </div>
             </div>
 
             <div>
-              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
-                32-Character Cryptographic Direct Seed Link
-              </label>
+              <label className="form-label">32-Character Direct Seed Link</label>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <input
-                  readOnly
-                  className="input-field"
-                  value={createdLinks.seedUrl}
-                  style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}
-                />
+                <input readOnly className="text-input" value={createdLinks.seedUrl} style={{ fontFamily: 'var(--font-mono)' }} />
                 <button
                   type="button"
-                  className="btn-primary"
+                  className="vault-trigger-btn"
+                  onClick={() => setQrModalData({ isOpen: true, url: createdLinks.seedUrl, title: title || 'Direct Seed Share' })}
+                  title="Display QR Code"
+                >
+                  <QrCode size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="vault-trigger-btn"
                   onClick={() => copyToClipboard(createdLinks.seedUrl, 'seed')}
                 >
                   {copiedKey === 'seed' ? <Check size={16} /> : <Copy size={16} />}
                 </button>
-                <a
-                  href={createdLinks.seedUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn-primary"
-                  style={{ textDecoration: 'none' }}
-                >
+                <a href={createdLinks.seedUrl} target="_blank" rel="noreferrer" className="vault-trigger-btn">
                   <ExternalLink size={16} />
                 </a>
               </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
+
+      {/* Security Feature Badges Bottom Row */}
+      <div className="feature-badge-row">
+        <div className="feature-pill-badge">
+          <Lock size={13} />
+          <span>One-time access</span>
+        </div>
+        <div className="feature-pill-badge">
+          <Droplet size={13} />
+          <span>Watermarked</span>
+        </div>
+        <div className="feature-pill-badge">
+          <Clock size={13} />
+          <span>Auto-expires</span>
+        </div>
+        <div className="feature-pill-badge">
+          <Link2Off size={13} />
+          <span>No direct URLs</span>
+        </div>
       </div>
 
-      {/* Triple-State Active Vaults History */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Layers size={18} style={{ color: 'var(--accent-cyan)' }} /> Active Shared Vaults
-          </h2>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-            Triple-State Persistence Engine Active
-          </span>
-        </div>
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={authenticatedUser => {
+          setUser(authenticatedUser);
+          setShowHistoryModal(true);
+          fetchHistory();
+        }}
+      />
 
-        {cachedList.length === 0 ? (
-          <div className="glass-panel" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-            No vaults created yet. Mint your first tokenized share above.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {cachedList.map(item => {
-              const isExpired = new Date() > new Date(item.expires_at);
-              return (
-                <div
-                  key={item.id}
-                  className="glass-panel"
+      {/* History Vault Drawer / Modal */}
+      {showHistoryModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(5, 9, 16, 0.8)',
+            backdropFilter: 'blur(12px)',
+            zIndex: 999998,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.5rem',
+          }}
+          onClick={() => setShowHistoryModal(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#0f1624',
+              border: '1px solid #1e2b42',
+              borderRadius: '16px',
+              maxWidth: '680px',
+              width: '100%',
+              maxHeight: '85vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+            }}
+          >
+            {/* Modal Header */}
+            <div
+              style={{
+                padding: '1.25rem 1.5rem',
+                borderBottom: '1px solid #1e2b42',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <FolderLock size={18} style={{ color: '#60a5fa' }} />
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                  History Vault
+                </h3>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  onClick={handleLogout}
                   style={{
-                    padding: '1.25rem 1.5rem',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between',
-                    flexWrap: 'wrap',
-                    gap: '1rem',
+                    gap: '0.35rem',
                   }}
                 >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.3rem' }}>
-                      <span style={{ fontWeight: 700, fontSize: '1rem' }}>{item.title}</span>
-                      <span
+                  <LogOut size={14} /> Log out
+                </button>
+                <button
+                  onClick={() => setShowHistoryModal(false)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+              {loadingHistory ? (
+                <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+                  Querying database records...
+                </div>
+              ) : historyList.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+                  No active share links stored in database.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {historyList.map(item => {
+                    const isExpired = new Date() > new Date(item.expires_at);
+                    const isRevoked = Boolean(item.revoked);
+
+                    return (
+                      <div
+                        key={item.id}
                         style={{
-                          fontSize: '0.7rem',
-                          padding: '0.15rem 0.5rem',
-                          borderRadius: '4px',
-                          background: item.type === 'proxy' ? 'rgba(121, 40, 202, 0.2)' : 'rgba(0, 240, 255, 0.1)',
-                          color: item.type === 'proxy' ? '#c084fc' : 'var(--accent-cyan)',
-                          fontWeight: 600,
+                          background: 'var(--bg-input)',
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: '10px',
+                          padding: '1rem 1.25rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '1rem',
                         }}
                       >
-                        {item.type.toUpperCase()}
-                      </span>
-                      {item.single_use && (
-                        <span
-                          style={{
-                            fontSize: '0.7rem',
-                            padding: '0.15rem 0.5rem',
-                            borderRadius: '4px',
-                            background: 'rgba(255, 0, 122, 0.15)',
-                            color: '#ff77aa',
-                            fontWeight: 600,
-                          }}
-                        >
-                          1-DEVICE LOCK
-                        </span>
-                      )}
-                      {isExpired && (
-                        <span
-                          style={{
-                            fontSize: '0.7rem',
-                            padding: '0.15rem 0.5rem',
-                            borderRadius: '4px',
-                            background: 'rgba(255, 51, 68, 0.2)',
-                            color: 'var(--accent-danger)',
-                            fontWeight: 600,
-                          }}
-                        >
-                          EXPIRED
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      <span>Code: <code style={{ color: 'var(--text-main)' }}>{item.short_code}</code></span>
-                      <span>Expires: {new Date(item.expires_at).toLocaleString()}</span>
-                    </div>
-                  </div>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.3rem' }}>
+                            <span style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--text-bright)' }}>
+                              {item.title}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '0.7rem',
+                                padding: '0.15rem 0.5rem',
+                                borderRadius: '4px',
+                                background: item.type === 'proxy' ? 'rgba(121, 40, 202, 0.2)' : 'rgba(59, 130, 246, 0.15)',
+                                color: item.type === 'proxy' ? '#c084fc' : '#93c5fd',
+                                fontWeight: 600,
+                              }}
+                            >
+                              {item.type.toUpperCase()}
+                            </span>
+                            {isRevoked ? (
+                              <span style={{ fontSize: '0.7rem', color: 'var(--accent-danger)', fontWeight: 600 }}>
+                                REVOKED
+                              </span>
+                            ) : isExpired ? (
+                              <span style={{ fontSize: '0.7rem', color: 'var(--accent-danger)', fontWeight: 600 }}>
+                                EXPIRED
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '0.7rem', color: '#34d399', fontWeight: 600 }}>
+                                ACTIVE
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            ID: <code style={{ color: 'var(--text-body)' }}>{item.short_code}</code> • Expiration: {new Date(item.expires_at).toLocaleString()}
+                          </div>
+                        </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <a
-                      href={`/v/${item.short_code}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn-primary"
-                      style={{ padding: '0.45rem 0.9rem', fontSize: '0.85rem', textDecoration: 'none' }}
-                    >
-                      Open <ExternalLink size={14} />
-                    </a>
-                    <button
-                      type="button"
-                      className="btn-danger"
-                      onClick={() => handleDelete(item.id)}
-                      title="Permanently Delete & Revoke"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {/* QR Code Icon: Only visible if active and NOT expired or revoked */}
+                          {!isExpired && !isRevoked && (
+                            <button
+                              type="button"
+                              className="vault-trigger-btn"
+                              style={{ padding: '0.4rem 0.6rem' }}
+                              onClick={() => setQrModalData({
+                                isOpen: true,
+                                url: `${window.location.origin}/v/${item.short_code}`,
+                                title: item.title,
+                              })}
+                              title="QR Code"
+                            >
+                              <QrCode size={14} />
+                            </button>
+                          )}
+
+                          {!isRevoked && !isExpired && (
+                            <a
+                              href={`/v/${item.short_code}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="vault-trigger-btn"
+                              style={{ padding: '0.4rem 0.8rem', textDecoration: 'none' }}
+                            >
+                              Open
+                            </a>
+                          )}
+
+                          {/* Reinstate / Reactivate Option: Visible if Expired or Revoked */}
+                          {(isExpired || isRevoked) && (
+                            <button
+                              type="button"
+                              onClick={() => handleRestore(item.id)}
+                              className="vault-trigger-btn"
+                              style={{
+                                color: '#34d399',
+                                borderColor: 'rgba(52, 211, 153, 0.3)',
+                                background: 'rgba(52, 211, 153, 0.08)',
+                                padding: '0.4rem 0.75rem',
+                                fontSize: '0.78rem',
+                              }}
+                              title="Restore and reactivate this link for 24 hours"
+                            >
+                              <RotateCcw size={14} /> Reactivate
+                            </button>
+                          )}
+
+                          {/* Revoke Option: Only if not already expired and not already revoked */}
+                          {!isExpired && !isRevoked && (
+                            <button
+                              type="button"
+                              onClick={() => handleRevoke(item.id)}
+                              className="vault-trigger-btn"
+                              style={{
+                                color: '#f87171',
+                                borderColor: 'rgba(239, 68, 68, 0.3)',
+                                background: 'rgba(239, 68, 68, 0.08)',
+                                padding: '0.4rem 0.75rem',
+                                fontSize: '0.78rem',
+                              }}
+                              title="Immediately disable this link (stays in history as revoked)"
+                            >
+                              <Ban size={14} /> Revoke
+                            </button>
+                          )}
+
+                          {/* Delete Option: Permanently erase with no history */}
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(item.id)}
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.12)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              color: '#f87171',
+                              padding: '0.45rem',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                            }}
+                            title="Permanently erase vault and wipe all history"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              )}
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+      {/* QR Code Sharing Modal */}
+      <QrModal
+        isOpen={qrModalData.isOpen}
+        onClose={() => setQrModalData({ isOpen: false, url: '', title: '' })}
+        url={qrModalData.url}
+        title={qrModalData.title}
+      />
+
+      {/* Command Palette (Cmd + K) */}
+      <CommandPalette
+        isOpen={showCommandPalette}
+        onClose={() => setShowCommandPalette(false)}
+        galleries={historyList}
+        onSelectGallery={g => {
+          window.open(`/v/${g.short_code}`, '_blank');
+        }}
+        onDeleteGallery={handleDelete}
+        onShowQr={(url, title) => {
+          setQrModalData({ isOpen: true, url, title });
+        }}
+        onCreateNew={mode => {
+          setActiveTab(mode);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onOpenHistory={handleOpenHistory}
+      />
     </div>
   );
 }

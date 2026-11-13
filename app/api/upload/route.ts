@@ -7,12 +7,26 @@ export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
     const type = (formData.get('type') as 'media' | 'proxy') || 'media';
-    const title = (formData.get('title') as string) || 'Untitled Vault';
+    const title = (formData.get('title') as string) || (type === 'proxy' ? 'Stealth Web Proxy' : 'Confidential Vault');
     const proxyTargetUrl = (formData.get('proxyTargetUrl') as string) || '';
-    const hours = parseInt((formData.get('hours') as string) || '24', 10);
+    const watermarkText = (formData.get('watermarkText') as string) || 'CONFIDENTIAL';
+    const watermarkEnabled = formData.get('watermarkEnabled') !== 'false';
+    const rawHours = parseInt((formData.get('hours') as string) || '24', 10);
     const singleUse = formData.get('singleUse') === 'true';
 
-    // Cookie management for Triple-State Ownership Tracking
+    // Check if user is logged in via oneview_auth cookie
+    const authCookie = req.cookies.get('oneview_auth')?.value;
+    const isAuthenticated = Boolean(authCookie);
+
+    // Guest restrictions: Max 24 hours (cannot use 7 days), restricted to single-use
+    let hours = rawHours;
+    if (!isAuthenticated) {
+      if (hours > 24) {
+        hours = 24; // Force maximum 24h cap for unauthenticated guests
+      }
+    }
+
+    // Cookie management for Ownership Tracking
     let creatorCookie = req.cookies.get('oneview_creator')?.value;
     let setCookieHeader = false;
     if (!creatorCookie) {
@@ -21,7 +35,7 @@ export async function POST(req: NextRequest) {
     }
     const cookieHash = hashCookie(creatorCookie);
 
-    // Calculate expiration timestamp
+    // Expiration timestamp
     const boundedHours = Math.max(1, Math.min(168, isNaN(hours) ? 24 : hours));
     const expiresAt = new Date(Date.now() + boundedHours * 60 * 60 * 1000).toISOString();
 
@@ -83,17 +97,20 @@ export async function POST(req: NextRequest) {
         single_use: shareLink.single_use,
         short_url: `/v/${shareLink.short_code}`,
         seed_url: `/v/seed/${shareLink.secure_seed}`,
+      },
+      watermark: {
+        text: watermarkText,
+        enabled: watermarkEnabled,
       }
     });
 
-    // Set ownership cookie if not previously present
     if (setCookieHeader) {
       response.cookies.set('oneview_creator', creatorCookie, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         path: '/',
-        maxAge: 365 * 24 * 60 * 60, // 1 year
+        maxAge: 365 * 24 * 60 * 60,
       });
     }
 

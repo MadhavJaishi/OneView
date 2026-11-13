@@ -28,35 +28,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Security token expired' }, { status: 410 });
     }
 
-    // 4. Session Shielding & Single-Usage Locking
+    // 4. Strict Single-Usage Enforcement & Automated Self-Destruction
+    if (shareLink.single_use) {
+      if (shareLink.view_count >= 1) {
+        return NextResponse.json({
+          success: false,
+          error: 'Single-Use Access Violation: This link was generated for one-time viewing and has already been accessed and consumed.'
+        }, { status: 410 });
+      }
+
+      // Mark consumed immediately upon first validation and revoke for all future requests
+      await db.updateShareLink(shareLink.id, {
+        view_count: shareLink.view_count + 1,
+        revoked: true,
+      });
+    } else {
+      // Normal multi-view link
+      await db.updateShareLink(shareLink.id, {
+        view_count: shareLink.view_count + 1
+      });
+    }
+
     let sessionId = req.cookies.get('oneview_session')?.value;
     let setSessionCookie = false;
 
     if (!sessionId) {
       sessionId = generateSessionId();
       setSessionCookie = true;
-    }
-
-    if (shareLink.single_use) {
-      if (shareLink.locked_session_id && shareLink.locked_session_id !== sessionId) {
-        return NextResponse.json({
-          success: false,
-          error: 'Single-Usage Access Violation: This link is bound to another device/session and cannot be accessed again.'
-        }, { status: 403 });
-      }
-
-      // Lock to this session on first arrival
-      if (!shareLink.locked_session_id) {
-        await db.updateShareLink(shareLink.id, {
-          locked_session_id: sessionId,
-          view_count: shareLink.view_count + 1
-        });
-      }
-    } else {
-      // Increment view count
-      await db.updateShareLink(shareLink.id, {
-        view_count: shareLink.view_count + 1
-      });
     }
 
     // 5. Retrieve Gallery details and images

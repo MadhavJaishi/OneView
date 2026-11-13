@@ -151,15 +151,42 @@ class LocalStore {
   deleteGallery(id: string): boolean {
     const g = this.galleries.get(id);
     if (!g) return false;
-    g.is_deleted = true;
-    this.galleries.set(id, g);
-    // revoke share links
+    // Hard delete - erase completely from store
+    this.galleries.delete(id);
+    this.galleryImages.delete(id);
+    for (const [key, link] of Array.from(this.shareLinks.entries())) {
+      if (link.gallery_id === id) {
+        this.shareLinks.delete(key);
+      }
+    }
+    return true;
+  }
+
+  revokeGallery(id: string): boolean {
+    const g = this.galleries.get(id);
+    if (!g) return false;
     for (const [key, link] of this.shareLinks.entries()) {
       if (link.gallery_id === id) {
         link.revoked = true;
       }
     }
     return true;
+  }
+
+  restoreGallery(id: string, extensionHours: number = 24): ShareLink | null {
+    const g = this.galleries.get(id);
+    if (!g) return false as any;
+    const newExpiresAt = new Date(Date.now() + extensionHours * 60 * 60 * 1000).toISOString();
+    let updatedLink: ShareLink | null = null;
+    for (const [key, link] of this.shareLinks.entries()) {
+      if (link.gallery_id === id) {
+        link.revoked = false;
+        link.expires_at = newExpiresAt;
+        link.view_count = 0; // reset consumption for single-use
+        updatedLink = link;
+      }
+    }
+    return updatedLink;
   }
 }
 
@@ -354,14 +381,13 @@ export const db = {
   async deleteGallery(id: string, cookieHash: string): Promise<boolean> {
     const supabase = await getSupabaseClient();
     if (supabase) {
-      // Mark deleted or remove
+      // Hard delete from supabase: cascades to gallery_images and share_links
       const { error } = await supabase
         .from('galleries')
-        .update({ is_deleted: true })
+        .delete()
         .eq('id', id)
         .eq('creator_cookie_hash', cookieHash);
       if (!error) {
-        await supabase.from('share_links').update({ revoked: true }).eq('gallery_id', id);
         return true;
       }
     }
@@ -370,5 +396,48 @@ export const db = {
       return localStore.deleteGallery(id);
     }
     return false;
+  },
+
+  async revokeGallery(id: string, cookieHash: string): Promise<boolean> {
+    const supabase = await getSupabaseClient();
+    if (supabase) {
+      const { error } = await supabase
+        .from('share_links')
+        .update({ revoked: true })
+        .eq('gallery_id', id);
+      if (!error) {
+        return true;
+      }
+    }
+    const gallery = localStore.getGallery(id);
+    if (gallery && gallery.creator_cookie_hash === cookieHash) {
+      return localStore.revokeGallery(id);
+    }
+    return false;
+  },
+
+  async restoreGallery(id: string, cookieHash: string, extensionHours: number = 24): Promise<ShareLink | null> {
+    const newExpiresAt = new Date(Date.now() + extensionHours * 60 * 60 * 1000).toISOString();
+    const supabase = await getSupabaseClient();
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('share_links')
+        .update({
+          revoked: false,
+          expires_at: newExpiresAt,
+          view_count: 0,
+        })
+        .eq('gallery_id', id)
+        .select()
+        .maybeSingle();
+      if (!error && data) {
+        return data;
+      }
+    }
+    const gallery = localStore.getGallery(id);
+    if (gallery && gallery.creator_cookie_hash === cookieHash) {
+      return localStore.restoreGallery(id, extensionHours);
+    }
+    return null;
   }
 };
