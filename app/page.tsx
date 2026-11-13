@@ -12,12 +12,11 @@ import {
   Check,
   ExternalLink,
   Layers,
-  ArrowRight,
   ShieldAlert,
-  Sliders,
   FileImage,
 } from 'lucide-react';
-import { TripleStateEngine, CachedGalleryEntry } from '@/lib/triple-state';
+import { GalleryEntryItem } from '@/lib/triple-state';
+import { useToast } from '@/components/ToastProvider';
 
 interface StagedFile {
   file: File;
@@ -25,6 +24,7 @@ interface StagedFile {
 }
 
 export default function Dashboard() {
+  const { toast, confirmModal } = useToast();
   const [activeTab, setActiveTab] = useState<'media' | 'proxy'>('media');
   const [title, setTitle] = useState('');
   const [proxyUrl, setProxyUrl] = useState('');
@@ -40,24 +40,18 @@ export default function Dashboard() {
   } | null>(null);
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [cachedList, setCachedList] = useState<CachedGalleryEntry[]>([]);
+  const [cachedList, setCachedList] = useState<GalleryEntryItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load cached galleries and sync with server
+  // Load vaults directly from database / server API
   const refreshGalleries = async () => {
-    // 1. First get local index cache filtered through suppression ledger
-    const local = TripleStateEngine.getCachedGalleries();
-    setCachedList(local);
-
-    // 2. Fetch server-side ownership tracking cookie list
     try {
       const res = await fetch('/api/gallery');
       const data = await res.json();
       if (data.success && data.galleries) {
-        // Map server response to CachedGalleryEntry
-        const mapped: CachedGalleryEntry[] = data.galleries.map((g: any) => ({
+        const mapped: GalleryEntryItem[] = data.galleries.map((g: any) => ({
           id: g.id,
           title: g.title,
           type: g.type,
@@ -68,11 +62,10 @@ export default function Dashboard() {
           images_count: g.images?.length || 0,
           created_at: g.created_at,
         }));
-        TripleStateEngine.setCachedGalleries(mapped);
-        setCachedList(TripleStateEngine.getCachedGalleries());
+        setCachedList(mapped);
       }
     } catch (err) {
-      console.warn('Could not sync with server gallery api', err);
+      console.warn('Could not load galleries from database API', err);
     }
   };
 
@@ -170,11 +163,11 @@ export default function Dashboard() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (activeTab === 'media' && stagedFiles.length === 0) {
-      alert('Please add at least one image to share');
+      toast.warning('Please add at least one image before sealing the vault.');
       return;
     }
     if (activeTab === 'proxy' && !proxyUrl.trim()) {
-      alert('Please enter a target URL for the proxy tunnel');
+      toast.warning('Please enter a target URL for the stealth proxy tunnel.');
       return;
     }
 
@@ -213,59 +206,56 @@ export default function Dashboard() {
 
       setCreatedLinks(linkData);
 
-      // Append to Triple-State Local Cache
-      TripleStateEngine.appendCache({
-        id: data.gallery.id,
-        title: data.gallery.title,
-        type: data.gallery.type,
-        short_code: data.shareLink.short_code,
-        secure_seed: data.shareLink.secure_seed,
-        expires_at: data.shareLink.expires_at,
-        single_use: data.shareLink.single_use,
-        images_count: data.gallery.images_count,
-        created_at: data.gallery.created_at,
-      });
+      // Refresh list directly from database
+      await refreshGalleries();
 
-      setCachedList(TripleStateEngine.getCachedGalleries());
+      toast.success('Tokenized vault generated successfully.', 'Vault Sealed');
 
       // Reset staged input
       setStagedFiles([]);
       setTitle('');
       setProxyUrl('');
     } catch (err: any) {
-      alert(`Error creating share link: ${err.message}`);
+      toast.error(err.message || 'Failed to seal vault', 'Upload Error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   // Secure Revoke & Deletion
-  const handleDelete = async (galleryId: string) => {
-    if (!confirm('Permanently revoke and delete this vault? This cannot be undone.')) return;
-
-    // 1. Immediately apply to client suppression ledger (Inertial Suppression)
-    TripleStateEngine.suppressId(galleryId);
-    setCachedList(TripleStateEngine.getCachedGalleries());
-
-    // 2. Transmit physical cascade deletion to server
-    try {
-      const res = await fetch('/api/gallery', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ galleryId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        console.error('Delete error on server:', data.error);
-      }
-    } catch (err) {
-      console.error('Failed to notify server of deletion:', err);
-    }
+  const handleDelete = (galleryId: string) => {
+    confirmModal({
+      title: 'Permanent Vault Revocation',
+      message: 'Are you sure you want to permanently revoke and delete this vault? All associated cryptographic access tokens will be immediately invalidated.',
+      confirmText: 'Revoke & Delete',
+      cancelText: 'Keep Vault',
+      onConfirm: async () => {
+        // Transmit physical cascade deletion to database
+        try {
+          const res = await fetch('/api/gallery', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ galleryId }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            toast.error(data.error || 'Failed to delete in database', 'Server Error');
+          } else {
+            // Update UI list from database
+            await refreshGalleries();
+            toast.info('Vault has been permanently purged from database.', 'Revoked');
+          }
+        } catch (err: any) {
+          toast.error(err.message || 'Network error during deletion', 'Revocation Failed');
+        }
+      },
+    });
   };
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
     setCopiedKey(key);
+    toast.success('Share link copied to clipboard.', 'Copied');
     setTimeout(() => setCopiedKey(null), 2000);
   };
 

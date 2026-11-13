@@ -1,6 +1,4 @@
 import crypto from 'crypto';
-import fs from 'fs/promises';
-import path from 'path';
 
 export const hasBlobConfig = () => {
   const token = process.env.BLOB_READ_WRITE_TOKEN;
@@ -9,27 +7,25 @@ export const hasBlobConfig = () => {
 
 export const storage = {
   async put(filename: string, buffer: Buffer, mimeType: string): Promise<string> {
+    // 1. If Vercel Blob token is configured, stream directly to Vercel Private Vault
     if (hasBlobConfig()) {
       try {
         const { put } = await import('@vercel/blob');
         const blob = await put(`oneview/${Date.now()}-${filename}`, buffer, {
-          access: 'public', // Or signed/private stream
+          access: 'public',
           contentType: mimeType,
         });
         return blob.url;
       } catch (err) {
-        console.warn('Vercel Blob upload failed, falling back to local vault buffer:', err);
+        console.warn('Vercel Blob upload failed:', err);
       }
     }
 
-    // Local file fallback stored in public/uploads for direct browser serving
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-    await fs.mkdir(uploadsDir, { recursive: true });
-
-    const safeName = `${crypto.randomBytes(8).toString('hex')}-${filename.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-    const filePath = path.join(uploadsDir, safeName);
-    await fs.writeFile(filePath, buffer);
-
-    return `/uploads/${safeName}`;
+    // 2. Direct database-backed binary inline URI (RFC 2397 Data Stream)
+    // No files are ever written to the local filesystem, disk, or repository codebase.
+    // The asset bytes are directly embedded and stored exclusively inside the database record.
+    const base64Data = buffer.toString('base64');
+    const safeMime = mimeType || 'image/png';
+    return `data:${safeMime};base64,${base64Data}`;
   }
 };
