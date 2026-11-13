@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, Suspense } from 'react';
+import React, { useEffect, useState, useRef, Suspense } from 'react';
 import { useParams } from 'next/navigation';
 import { AntiLeakShield } from '@/components/AntiLeakShield';
 import { HorizontalKineticViewport } from '@/components/HorizontalKineticViewport';
@@ -15,9 +15,11 @@ function ViewerContent() {
   const [error, setError] = useState<string | null>(null);
   const [galleryData, setGalleryData] = useState<any>(null);
   const [watermark, setWatermark] = useState<any>(null);
+  const hasCalled = useRef(false);
 
   useEffect(() => {
-    if (!code) return;
+    if (!code || hasCalled.current) return;
+    hasCalled.current = true;
 
     const validateToken = async () => {
       try {

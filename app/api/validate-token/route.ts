@@ -28,33 +28,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Security token expired' }, { status: 410 });
     }
 
-    // 4. Strict Single-Usage Enforcement & Automated Self-Destruction
-    if (shareLink.single_use) {
-      if (shareLink.view_count >= 1) {
-        return NextResponse.json({
-          success: false,
-          error: 'Single-Use Access Violation: This link was generated for one-time viewing and has already been accessed and consumed.'
-        }, { status: 410 });
-      }
-
-      // Mark consumed immediately upon first validation and revoke for all future requests
-      await db.updateShareLink(shareLink.id, {
-        view_count: shareLink.view_count + 1,
-        revoked: true,
-      });
-    } else {
-      // Normal multi-view link
-      await db.updateShareLink(shareLink.id, {
-        view_count: shareLink.view_count + 1
-      });
-    }
-
+    // 4. Session Identification
     let sessionId = req.cookies.get('oneview_session')?.value;
     let setSessionCookie = false;
 
     if (!sessionId) {
       sessionId = generateSessionId();
       setSessionCookie = true;
+    }
+
+    // 5. Strict Single-Use (Burn-on-Open) Enforcement
+    if (shareLink.single_use) {
+      // If already opened once, reject immediately (even on page refresh or same browser)
+      if (shareLink.view_count >= 1 || shareLink.revoked) {
+        return NextResponse.json({
+          success: false,
+          error: 'Single-Use Access Violation: This link was generated for one-time viewing only and has already been opened and consumed.'
+        }, { status: 410 });
+      }
+
+      // Mark as burned/consumed in database immediately upon first access
+      await db.updateShareLink(shareLink.id, {
+        view_count: 1,
+        revoked: true,
+        locked_session_id: sessionId,
+      });
+    } else {
+      // Normal multi-view link
+      await db.updateShareLink(shareLink.id, {
+        view_count: shareLink.view_count + 1
+      });
     }
 
     // 5. Retrieve Gallery details and images

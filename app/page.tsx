@@ -779,55 +779,28 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div>
-              <label className="form-label">Human-Readable Quick Link</label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <input readOnly className="text-input" value={createdLinks.shortUrl} style={{ fontFamily: 'var(--font-mono)' }} />
-                <button
-                  type="button"
-                  className="vault-trigger-btn"
-                  onClick={() => setQrModalData({ isOpen: true, url: createdLinks.shortUrl, title: title || 'Confidential Share' })}
-                  title="Display QR Code"
-                >
-                  <QrCode size={16} />
-                </button>
-                <button
-                  type="button"
-                  className="vault-trigger-btn"
-                  onClick={() => copyToClipboard(createdLinks.shortUrl, 'short')}
-                >
-                  {copiedKey === 'short' ? <Check size={16} /> : <Copy size={16} />}
-                </button>
-                <a href={createdLinks.shortUrl} target="_blank" rel="noreferrer" className="vault-trigger-btn">
-                  <ExternalLink size={16} />
-                </a>
-              </div>
-            </div>
-
-            <div>
-              <label className="form-label">32-Character Direct Seed Link</label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <input readOnly className="text-input" value={createdLinks.seedUrl} style={{ fontFamily: 'var(--font-mono)' }} />
-                <button
-                  type="button"
-                  className="vault-trigger-btn"
-                  onClick={() => setQrModalData({ isOpen: true, url: createdLinks.seedUrl, title: title || 'Direct Seed Share' })}
-                  title="Display QR Code"
-                >
-                  <QrCode size={16} />
-                </button>
-                <button
-                  type="button"
-                  className="vault-trigger-btn"
-                  onClick={() => copyToClipboard(createdLinks.seedUrl, 'seed')}
-                >
-                  {copiedKey === 'seed' ? <Check size={16} /> : <Copy size={16} />}
-                </button>
-                <a href={createdLinks.seedUrl} target="_blank" rel="noreferrer" className="vault-trigger-btn">
-                  <ExternalLink size={16} />
-                </a>
-              </div>
+          <div style={{ maxWidth: '640px' }}>
+            <label className="form-label">Secure Access Link</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input readOnly className="text-input" value={createdLinks.shortUrl} style={{ fontFamily: 'var(--font-mono)' }} />
+              <button
+                type="button"
+                className="vault-trigger-btn"
+                onClick={() => setQrModalData({ isOpen: true, url: createdLinks.shortUrl, title: title || 'Confidential Share' })}
+                title="Display QR Code"
+              >
+                <QrCode size={16} />
+              </button>
+              <button
+                type="button"
+                className="vault-trigger-btn"
+                onClick={() => copyToClipboard(createdLinks.shortUrl, 'short')}
+              >
+                {copiedKey === 'short' ? <Check size={16} /> : <Copy size={16} />}
+              </button>
+              <a href={createdLinks.shortUrl} target="_blank" rel="noreferrer" className="vault-trigger-btn">
+                <ExternalLink size={16} />
+              </a>
             </div>
           </div>
         </div>
