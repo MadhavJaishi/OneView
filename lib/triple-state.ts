@@ -15,4 +15,5 @@ export interface GalleryEntryItem {
   images_count: number;
   created_at: string;
   revoked?: boolean;
+  view_count?: number;
 }

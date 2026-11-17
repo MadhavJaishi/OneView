@@ -8,6 +8,7 @@ export interface Gallery {
   title: string;
   type: 'media' | 'proxy';
   proxy_target_url?: string | null;
+  watermark_text?: string;
   is_deleted: boolean;
 }
 
@@ -59,6 +60,7 @@ class LocalStore {
       title: data.title || 'Untitled Vault',
       type: data.type,
       proxy_target_url: data.proxy_target_url || null,
+      watermark_text: (data as any).watermark_text || 'RESTRICTED VIEW',
       is_deleted: false,
     };
     this.galleries.set(id, gallery);
@@ -203,15 +205,25 @@ if (process.env.NODE_ENV !== 'production') {
 // Helper checking if Supabase credentials are configured and valid
 export const hasSupabaseConfig = () => {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  return Boolean(url && key && !url.includes('YOUR_URL') && !key.includes('YOUR_'));
+  const key = [
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  ].find(k => Boolean(k && !k.includes('YOUR_URL') && !k.includes('YOUR_')));
+
+  return Boolean(url && key && !url.includes('YOUR_URL') && !url.includes('YOUR_'));
 };
 
 export const getSupabaseClient = async () => {
   if (!hasSupabaseConfig()) return null;
   const { createClient } = await import('@supabase/supabase-js');
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+  const key = [
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  ].find(k => Boolean(k && !k.includes('YOUR_URL') && !k.includes('YOUR_')))!;
+
   return createClient(url, key, { auth: { persistSession: false } });
 };
 
@@ -350,29 +362,27 @@ export const db = {
   async getGalleriesByCreator(cookieHash: string): Promise<CompleteGallery[]> {
     const supabase = await getSupabaseClient();
     if (supabase) {
-      const { data: galleries } = await supabase
+      // 1 single lightning-fast join query instead of N sequential requests
+      // Excludes heavy blob_url payloads (only fetches image IDs for count)
+      const { data: galleries, error } = await supabase
         .from('galleries')
-        .select('*')
+        .select(`
+          *,
+          share_links (*),
+          gallery_images (id, filename, sort_order)
+        `)
         .eq('creator_cookie_hash', cookieHash)
         .eq('is_deleted', false)
         .order('created_at', { ascending: false });
 
-      if (galleries && galleries.length > 0) {
-        const full: CompleteGallery[] = [];
-        for (const g of galleries) {
-          const imgs = await this.getGalleryImages(g.id);
-          const { data: link } = await supabase
-            .from('share_links')
-            .select('*')
-            .eq('gallery_id', g.id)
-            .maybeSingle();
-          full.push({
-            ...g,
-            images: imgs,
-            share_link: link || undefined,
-          });
-        }
-        return full;
+      if (error) {
+        console.warn('Supabase join query error, falling back:', error.message);
+      } else if (galleries) {
+        return galleries.map((g: any) => ({
+          ...g,
+          images: g.gallery_images || [],
+          share_link: Array.isArray(g.share_links) ? g.share_links[0] : g.share_links || undefined,
+        }));
       }
     }
     return localStore.getGalleriesByCreator(cookieHash);

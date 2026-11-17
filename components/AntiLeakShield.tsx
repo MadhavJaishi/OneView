@@ -8,7 +8,9 @@ interface AntiLeakShieldProps {
   sessionId?: string;
   clientHash?: string;
   timeTag?: string;
+  watermarkText?: string;
   enabled?: boolean;
+  isProxy?: boolean;
 }
 
 export const AntiLeakShield: React.FC<AntiLeakShieldProps> = ({
@@ -16,7 +18,9 @@ export const AntiLeakShield: React.FC<AntiLeakShieldProps> = ({
   sessionId = 'SEC-8921',
   clientHash = 'X8A9F',
   timeTag = '12:00:00',
+  watermarkText = 'RESTRICTED VIEW',
   enabled = true,
+  isProxy = false,
 }) => {
   const [isBlurred, setIsBlurred] = useState(false);
   const [blurReason, setBlurReason] = useState<string>('');
@@ -53,8 +57,20 @@ export const AntiLeakShield: React.FC<AntiLeakShieldProps> = ({
     if (!enabled) return;
 
     const handleWindowBlur = () => {
-      setIsBlurred(true);
-      setBlurReason('Focus Lost: Window out of focus');
+      // In proxy mode, clicking into an iframe transfers window focus to the iframe.
+      // This is expected user interaction, so we do not blur.
+      if (isProxy) return;
+
+      setTimeout(() => {
+        if (
+          document.activeElement instanceof HTMLIFrameElement ||
+          document.activeElement?.tagName === 'IFRAME'
+        ) {
+          return;
+        }
+        setIsBlurred(true);
+        setBlurReason('Focus Lost: Window out of focus');
+      }, 60);
     };
 
     const handleWindowFocus = () => {
@@ -89,21 +105,10 @@ export const AntiLeakShield: React.FC<AntiLeakShieldProps> = ({
     };
   }, [enabled, handleContextMenu, handleKeyDown, handleDragStart]);
 
-  const watermarkString = `ONEVIEW SECURE // SESS:${sessionId} // NODE:${clientHash} // ${timeTag}`;
+  const watermarkString = `${watermarkText.toUpperCase()} // SESS:${sessionId} // ${timeTag}`;
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh', userSelect: 'none' }}>
-      {/* Dynamic Watermark Grid */}
-      {enabled && (
-        <div className="anti-leak-watermark" aria-hidden="true">
-          {Array.from({ length: 48 }).map((_, idx) => (
-            <span key={idx} className="watermark-token">
-              {watermarkString}
-            </span>
-          ))}
-        </div>
-      )}
-
       {/* Primary Visual Content (Subject to Blur) */}
       <div className={isBlurred ? 'tab-guard-blur' : ''} style={{ transition: 'filter 0.15s ease' }}>
         {children}

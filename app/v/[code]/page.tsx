@@ -120,56 +120,72 @@ function ViewerContent() {
       sessionId={watermark?.sessionId}
       clientHash={watermark?.clientHash}
       timeTag={watermark?.timeTag}
+      watermarkText={watermark?.watermarkText || galleryData.watermarkText || 'RESTRICTED VIEW'}
+      isProxy={Boolean(galleryData?.isProxy)}
     >
-      <div style={{ minHeight: '100vh', padding: '1.5rem' }}>
-        <div
+      <div style={{ minHeight: '100vh', padding: '1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
+        <header
           style={{
+            position: 'relative',
+            zIndex: 1000000, // Higher than watermark to ensure zero watermark bleed on header
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '0.85rem 1.5rem',
-            background: 'rgba(18, 21, 31, 0.85)',
-            backdropFilter: 'blur(16px)',
+            padding: '1rem 1.5rem',
+            background: 'rgba(15, 23, 42, 0.95)',
+            backdropFilter: 'blur(20px)',
             borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--border-subtle)',
-            marginBottom: '1.5rem',
+            border: '1px solid rgba(59, 130, 246, 0.25)',
+            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5)',
+            marginBottom: '1.75rem',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
             <span
               style={{
-                fontSize: '0.75rem',
-                background: 'rgba(0, 240, 255, 0.12)',
-                color: 'var(--accent-cyan)',
-                padding: '0.25rem 0.6rem',
-                borderRadius: 'var(--radius-sm)',
+                fontSize: '0.72rem',
+                background: 'rgba(59, 130, 246, 0.15)',
+                color: '#60a5fa',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                padding: '0.25rem 0.65rem',
+                borderRadius: 'var(--radius-full)',
                 fontWeight: 700,
-                letterSpacing: '1px',
+                letterSpacing: '0.8px',
               }}
             >
               ONEVIEW PROTECTED
             </span>
-            <h1 style={{ fontSize: '1.15rem', fontWeight: 700 }}>{galleryData.title}</h1>
+            <h1 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+              {galleryData.title}
+            </h1>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', fontSize: '0.8rem', color: 'var(--text-body)' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Clock size={14} style={{ color: 'var(--accent-cyan)' }} /> Live Session Guard
+              <Clock size={14} style={{ color: '#60a5fa' }} /> Live Session Guard
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Lock size={14} style={{ color: 'var(--accent-cyan)' }} /> Anti-Leak Watermark Active
+              <Lock size={14} style={{ color: '#60a5fa' }} /> Anti-Leak Shield Active
             </span>
           </div>
-        </div>
+        </header>
 
-        {galleryData.isProxy && galleryData.proxyPath ? (
-          <StealthProxyViewer proxyPath={galleryData.proxyPath} title={galleryData.title} />
+        {galleryData.isProxy && (galleryData.targetUrl || galleryData.proxyPath) ? (
+          <StealthProxyViewer
+            targetUrl={galleryData.targetUrl}
+            proxyPath={galleryData.proxyPath}
+            title={galleryData.title}
+          />
         ) : (
           <div>
             <div style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               Horizontal Kinetic Viewport • {galleryData.images?.length || 0} Assets
             </div>
-            <HorizontalKineticViewport images={galleryData.images} />
+            <HorizontalKineticViewport
+              images={galleryData.images}
+              watermarkText={watermark?.watermarkText || galleryData.watermarkText || 'RESTRICTED VIEW'}
+              sessionId={watermark?.sessionId}
+            />
           </div>
         )}
       </div>

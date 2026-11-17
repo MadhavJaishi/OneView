@@ -70,10 +70,12 @@ export async function POST(req: NextRequest) {
 
     // Client watermark identifier components (IP hash, timestamp, session ID)
     const clientIp = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
+    const watermarkText = (gallery as any).watermark_text || 'CONFIDENTIAL';
     const watermarkData = {
       sessionId: sessionId.slice(-8).toUpperCase(),
       clientHash: Buffer.from(clientIp).toString('base64').slice(0, 6).toUpperCase(),
       timeTag: new Date().toLocaleTimeString('en-US', { hour12: false }),
+      watermarkText,
     };
 
     const response = NextResponse.json({
@@ -82,6 +84,7 @@ export async function POST(req: NextRequest) {
         id: gallery.id,
         title: gallery.title,
         type: gallery.type,
+        watermarkText,
         images: images.map(img => ({
           id: img.id,
           url: img.blob_url,
@@ -90,7 +93,11 @@ export async function POST(req: NextRequest) {
           mime_type: img.mime_type
         })),
         isProxy: gallery.type === 'proxy',
-        // Raw target host is NOT returned to client if proxy mode!
+        targetUrl: gallery.type === 'proxy' && gallery.proxy_target_url
+          ? (gallery.proxy_target_url.startsWith('http://') || gallery.proxy_target_url.startsWith('https://')
+              ? gallery.proxy_target_url
+              : `https://${gallery.proxy_target_url}`)
+          : null,
         proxyPath: gallery.type === 'proxy' ? `/api/proxy-site?token=${token}` : null,
       },
       expires_at: shareLink.expires_at,
