@@ -351,6 +351,21 @@
   padding: 0;
 }
 
+/* High-Contrast Accessible Text Selection */
+::selection,
+*::selection {
+  background-color: var(--accent-primary);
+  color: #ffffff !important;
+  text-shadow: none !important;
+}
+
+::-moz-selection,
+*::-moz-selection {
+  background-color: var(--accent-primary);
+  color: #ffffff !important;
+  text-shadow: none !important;
+}
+
 body {
   background-color: var(--bg-app);
   color: var(--text-bright);
